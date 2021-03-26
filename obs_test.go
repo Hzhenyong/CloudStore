@@ -1,9 +1,9 @@
 package CloudStore
 
 import (
-	"CloudStore/obs"
 	"bytes"
 	"fmt"
+	"github.com/Hzhenyong/CloudStore/obs"
 	"io/ioutil"
 	"os"
 	"testing"

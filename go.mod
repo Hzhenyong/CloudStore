@@ -1,4 +1,4 @@
-module CloudStore
+module github.com/Hzhenyong/CloudStore
 
 go 1.16
 
