@@ -18,6 +18,8 @@ package api
 
 import (
 	"bytes"
+	net_http "net/http"
+	"strings"
 
 	"github.com/baidubce/bce-sdk-go/bce"
 	"github.com/baidubce/bce-sdk-go/http"
@@ -30,6 +32,7 @@ const (
 	STORAGE_CLASS_STANDARD    = "STANDARD"
 	STORAGE_CLASS_STANDARD_IA = "STANDARD_IA"
 	STORAGE_CLASS_COLD        = "COLD"
+	STORAGE_CLASS_ARCHIVE     = "ARCHIVE"
 
 	FETCH_MODE_SYNC  = "sync"
 	FETCH_MODE_ASYNC = "async"
@@ -46,7 +49,34 @@ const (
 	STATUS_DISABLED = "disabled"
 
 	ENCRYPTION_AES256 = "AES256"
+
+	RESTORE_TIER_STANDARD  = "Standard"  //标准取回对象
+	RESTORE_TIER_EXPEDITED = "Expedited" //快速取回对象
+
+	FORBID_OVERWRITE_FALSE = "false"
+	FORBID_OVERWRITE_TRUE  = "true"
 )
+
+var DEFAULT_CNAME_LIKE_LIST = []string{
+	".cdn.bcebos.com",
+}
+
+var VALID_STORAGE_CLASS_TYPE = map[string]int{
+	STORAGE_CLASS_STANDARD:    0,
+	STORAGE_CLASS_STANDARD_IA: 1,
+	STORAGE_CLASS_COLD:        2,
+	STORAGE_CLASS_ARCHIVE:     3,
+}
+
+var VALID_RESTORE_TIER = map[string]int{
+	RESTORE_TIER_STANDARD:  1,
+	RESTORE_TIER_EXPEDITED: 1,
+}
+
+var VALID_FORBID_OVERWRITE = map[string]int{
+	FORBID_OVERWRITE_FALSE: 1,
+	FORBID_OVERWRITE_TRUE:  1,
+}
 
 var (
 	GET_OBJECT_ALLOWED_RESPONSE_HEADERS = map[string]struct{}{
@@ -67,6 +97,18 @@ func getObjectUri(bucketName, objectName string) string {
 	return bce.URI_PREFIX + bucketName + "/" + objectName
 }
 
+func getCnameUri(uri string) string {
+	if len(uri) <= 0 {
+		return uri
+	}
+	slash_index := strings.Index(uri[1:], "/")
+	if slash_index == -1 {
+		return bce.URI_PREFIX
+	} else {
+		return uri[slash_index+1:]
+	}
+}
+
 func validMetadataDirective(val string) bool {
 	if val == METADATA_DIRECTIVE_COPY || val == METADATA_DIRECTIVE_REPLACE {
 		return true
@@ -74,10 +116,15 @@ func validMetadataDirective(val string) bool {
 	return false
 }
 
+func validForbidOverwrite(val string) bool {
+	if _, ok := VALID_FORBID_OVERWRITE[val]; ok {
+		return true
+	}
+	return false
+}
+
 func validStorageClass(val string) bool {
-	if val == STORAGE_CLASS_STANDARD_IA ||
-		val == STORAGE_CLASS_STANDARD ||
-		val == STORAGE_CLASS_COLD {
+	if _, ok := VALID_STORAGE_CLASS_TYPE[val]; ok {
 		return true
 	}
 	return false
@@ -146,6 +193,8 @@ func setOptionalNullHeaders(req *bce.BceRequest, args map[string]string) {
 			fallthrough
 		case http.BCE_CONTENT_SHA256:
 			fallthrough
+		case http.BCE_CONTENT_CRC32:
+			fallthrough
 		case http.BCE_COPY_SOURCE_RANGE:
 			fallthrough
 		case http.BCE_COPY_SOURCE_IF_MATCH:
@@ -174,4 +223,52 @@ func setUserMetadata(req *bce.BceRequest, meta map[string]string) error {
 		req.SetHeader(http.BCE_USER_METADATA_PREFIX+k, v)
 	}
 	return nil
+}
+
+func isCnameLikeHost(host string) bool {
+	for _, suffix := range DEFAULT_CNAME_LIKE_LIST {
+		if strings.HasSuffix(strings.ToLower(host), suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func SendRequest(cli bce.Client, req *bce.BceRequest, resp *bce.BceResponse) error {
+	var (
+		err        error
+		need_retry bool
+	)
+
+	req.SetEndpoint(cli.GetBceClientConfig().Endpoint)
+	origin_uri := req.Uri()
+	// set uri for cname or cdn endpoint
+	if cli.GetBceClientConfig().CnameEnabled || isCnameLikeHost(cli.GetBceClientConfig().Endpoint) {
+		req.SetUri(getCnameUri(origin_uri))
+	}
+
+	if err = cli.SendRequest(req, resp); err != nil {
+		if serviceErr, isServiceErr := err.(*bce.BceServiceError); isServiceErr {
+			if serviceErr.StatusCode == net_http.StatusInternalServerError ||
+				serviceErr.StatusCode == net_http.StatusBadGateway ||
+				serviceErr.StatusCode == net_http.StatusServiceUnavailable ||
+				(serviceErr.StatusCode == net_http.StatusBadRequest && serviceErr.Code == "Http400") {
+				need_retry = true
+			}
+		}
+		if _, isClientErr := err.(*bce.BceClientError); isClientErr {
+			need_retry = true
+		}
+		// retry backup endpoint
+		if need_retry && cli.GetBceClientConfig().BackupEndpoint != "" {
+			req.SetEndpoint(cli.GetBceClientConfig().BackupEndpoint)
+			if cli.GetBceClientConfig().CnameEnabled || isCnameLikeHost(cli.GetBceClientConfig().BackupEndpoint) {
+				req.SetUri(getCnameUri(origin_uri))
+			}
+			if err = cli.SendRequest(req, resp); err != nil {
+				return err
+			}
+		}
+	}
+	return err
 }

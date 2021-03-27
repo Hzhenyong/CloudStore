@@ -11,8 +11,7 @@ type FileInfo struct {
 	Size        int64
 	ContentType string
 	IsDir       bool
-	IsEmptyDir  bool
-	MD5         string
+	ETag        string
 	Time        time.Time
 
 	Meta map[string]string
@@ -49,12 +48,10 @@ func parseHeaderToFileInfo(header http.Header, getinfo bool) *FileInfo {
 		fInfo.Size = parseStrToInt(header.Get("x-upyun-file-size"))
 		fInfo.IsDir = header.Get("x-upyun-file-type") == "folder"
 		fInfo.Time = time.Unix(parseStrToInt(header.Get("x-upyun-file-date")), 0)
-		fInfo.ContentType = header.Get("Content-Type")
-		fInfo.MD5 = header.Get("Content-MD5")
 	} else {
 		fInfo.Size = parseStrToInt(header.Get("Content-Length"))
 		fInfo.ContentType = header.Get("Content-Type")
-		fInfo.MD5 = strings.Replace(header.Get("ETag"), "\"", "", -1)
+		fInfo.ETag = header.Get("ETag")
 		fInfo.ImgType = header.Get("x-upyun-file-type")
 		fInfo.ImgWidth = parseStrToInt(header.Get("x-upyun-width"))
 		fInfo.ImgHeight = parseStrToInt(header.Get("x-upyun-height"))

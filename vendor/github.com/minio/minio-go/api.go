@@ -102,7 +102,7 @@ type Options struct {
 // Global constants.
 const (
 	libraryName    = "minio-go"
-	libraryVersion = "v6.0.21"
+	libraryVersion = "v6.0.14"
 )
 
 // User Agent should always following the below style.
@@ -295,15 +295,10 @@ func privateNew(endpoint string, creds *credentials.Credentials, secure bool, re
 	// Save endpoint URL, user agent for future uses.
 	clnt.endpointURL = endpointURL
 
-	transport, err := DefaultTransport(secure)
-	if err != nil {
-		return nil, err
-	}
-
 	// Instantiate http client and bucket location cache.
 	clnt.httpClient = &http.Client{
 		Jar:           jar,
-		Transport:     transport,
+		Transport:     DefaultTransport,
 		CheckRedirect: clnt.redirectHeaders,
 	}
 

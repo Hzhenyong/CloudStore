@@ -16,7 +16,7 @@ type ErrorResponse struct {
 	Code      string
 	Message   string
 	Resource  string
-	RequestID string `header:"x-cos-request-id,omitempty" url:"-" xml:"-"`
+	RequestID string `header:"x-cos-request-id,omitempty" url:"-" xml:"RequestId,omitempty"`
 	TraceID   string `xml:"TraceId,omitempty"`
 }
 
@@ -24,11 +24,11 @@ type ErrorResponse struct {
 func (r *ErrorResponse) Error() string {
 	RequestID := r.RequestID
 	if RequestID == "" {
-		RequestID = r.Response.Header["X-Cos-Request-Id"][0]
+		RequestID = r.Response.Header.Get("X-Cos-Request-Id")
 	}
 	TraceID := r.TraceID
 	if TraceID == "" {
-		TraceID = r.Response.Header["X-Cos-Trace-Id"][0]
+		TraceID = r.Response.Header.Get("X-Cos-Trace-Id")
 	}
 	return fmt.Sprintf("%v %v: %d %v(Message: %v, RequestId: %v, TraceId: %v)",
 		r.Response.Request.Method, r.Response.Request.URL,
@@ -46,4 +46,26 @@ func checkResponse(r *http.Response) error {
 		xml.Unmarshal(data, errorResponse)
 	}
 	return errorResponse
+}
+
+func IsNotFoundError(e error) bool {
+	if e == nil {
+		return false
+	}
+	err, ok := e.(*ErrorResponse)
+	if !ok {
+		return false
+	}
+	if err.Response != nil && err.Response.StatusCode == 404 {
+		return true
+	}
+	return false
+}
+
+func IsCOSError(e error) (*ErrorResponse, bool) {
+	if e == nil {
+		return nil, false
+	}
+	err, ok := e.(*ErrorResponse)
+	return err, ok
 }

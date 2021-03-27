@@ -90,19 +90,19 @@ type ParquetInputOptions struct{}
 type CSVInputOptions struct {
 	FileHeaderInfo       CSVFileHeaderInfo
 	RecordDelimiter      string
-	FieldDelimiter       string `xml:",omitempty"`
-	QuoteCharacter       string `xml:",omitempty"`
-	QuoteEscapeCharacter string `xml:",omitempty"`
-	Comments             string `xml:",omitempty"`
+	FieldDelimiter       string
+	QuoteCharacter       string
+	QuoteEscapeCharacter string
+	Comments             string
 }
 
 // CSVOutputOptions csv output specific options
 type CSVOutputOptions struct {
-	QuoteFields          CSVQuoteFields `xml:",omitempty"`
+	QuoteFields          CSVQuoteFields
 	RecordDelimiter      string
-	FieldDelimiter       string `xml:",omitempty"`
-	QuoteCharacter       string `xml:",omitempty"`
-	QuoteEscapeCharacter string `xml:",omitempty"`
+	FieldDelimiter       string
+	QuoteCharacter       string
+	QuoteEscapeCharacter string
 }
 
 // JSONInputOptions json input specific options
@@ -325,7 +325,7 @@ func (s *SelectResults) start(pipeWriter *io.PipeWriter) {
 
 			switch m {
 			case errorMsg:
-				pipeWriter.CloseWithError(errors.New(headers.Get("error-code") + ":\"" + headers.Get("error-message") + "\""))
+				pipeWriter.CloseWithError(errors.New("Error Type of " + headers.Get("error-type") + " " + headers.Get("error-message")))
 				closeResponse(s.resp)
 				return
 			case commonMsg:

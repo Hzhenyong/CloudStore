@@ -54,6 +54,8 @@ import (
 // will define its own client in case of specific extension.
 type Client interface {
 	SendRequest(*BceRequest, *BceResponse) error
+	SendRequestFromBytes(*BceRequest, *BceResponse, []byte) error
+	GetBceClientConfig() *BceClientConfiguration
 }
 
 // BceClient defines the general client to access the BCE services.
@@ -71,7 +73,9 @@ func (c *BceClient) buildHttpRequest(request *BceRequest) {
 	request.BuildHttpRequest()
 
 	// Set the client specific configurations
-	request.SetEndpoint(c.Config.Endpoint)
+	if request.Endpoint() == "" {
+		request.SetEndpoint(c.Config.Endpoint)
+	}
 	if request.Protocol() == "" {
 		request.SetProtocol(DEFAULT_PROTOCOL)
 	}
@@ -118,7 +122,7 @@ func (c *BceClient) SendRequest(req *BceRequest, resp *BceResponse) error {
 		// The request body should be temporarily saved if retry to send the http request
 		var retryBuf bytes.Buffer
 		var teeReader io.Reader
-		if req.Body() != nil {
+		if c.Config.Retry.ShouldRetry(nil, 0) && req.Body() != nil {
 			teeReader = io.TeeReader(req.Body(), &retryBuf)
 			req.Request.SetBody(ioutil.NopCloser(teeReader))
 		}
@@ -169,6 +173,95 @@ func (c *BceClient) SendRequest(req *BceRequest, resp *BceResponse) error {
 	}
 }
 
+// SendRequestFromBytes - the client performs sending the http request with retry policy and receive the
+// response from the BCE services.
+//
+// PARAMS:
+//     - req: the request object to be sent to the BCE service
+//     - resp: the response object to receive the content from BCE service
+//     - content: the content of body
+// RETURNS:
+//     - error: nil if ok otherwise the specific error
+func (c *BceClient) SendRequestFromBytes(req *BceRequest, resp *BceResponse, content []byte) error {
+	// Return client error if it is not nil
+	if req.ClientError() != nil {
+		return req.ClientError()
+	}
+	// Build the http request and prepare to send
+	c.buildHttpRequest(req)
+	log.Infof("send http request: %v", req)
+	// Send request with the given retry policy
+	retries := 0
+	for {
+		// The request body should be temporarily saved if retry to send the http request
+		buf := bytes.NewBuffer(content)
+		req.Request.SetBody(ioutil.NopCloser(buf))
+		defer req.Request.Body().Close() // Manually close the ReadCloser body for retry
+		httpResp, err := http.Execute(&req.Request)
+		if err != nil {
+			if c.Config.Retry.ShouldRetry(err, retries) {
+				delay_in_mills := c.Config.Retry.GetDelayBeforeNextRetryInMillis(err, retries)
+				time.Sleep(delay_in_mills)
+			} else {
+				return &BceClientError{
+					fmt.Sprintf("execute http request failed! Retried %d times, error: %v",
+						retries, err)}
+			}
+			retries++
+			log.Warnf("send request failed: %v, retry for %d time(s)", err, retries)
+			continue
+		}
+		resp.SetHttpResponse(httpResp)
+		resp.ParseResponse()
+		log.Infof("receive http response: status: %s, debugId: %s, requestId: %s, elapsed: %v",
+			resp.StatusText(), resp.DebugId(), resp.RequestId(), resp.ElapsedTime())
+		for k, v := range resp.Headers() {
+			log.Debugf("%s=%s", k, v)
+		}
+		if resp.IsFail() {
+			err := resp.ServiceError()
+			if c.Config.Retry.ShouldRetry(err, retries) {
+				delay_in_mills := c.Config.Retry.GetDelayBeforeNextRetryInMillis(err, retries)
+				time.Sleep(delay_in_mills)
+			} else {
+				return err
+			}
+			retries++
+			log.Warnf("send request failed, retry for %d time(s)", retries)
+			continue
+		}
+		return nil
+	}
+}
+
+func (c *BceClient) GetBceClientConfig() *BceClientConfiguration {
+	return c.Config
+}
+
 func NewBceClient(conf *BceClientConfiguration, sign auth.Signer) *BceClient {
+	clientConfig := http.ClientConfig{RedirectDisabled: conf.RedirectDisabled}
+	http.InitClient(clientConfig)
 	return &BceClient{conf, sign}
+}
+
+func NewBceClientWithAkSk(ak, sk, endPoint string) (*BceClient, error) {
+	credentials, err := auth.NewBceCredentials(ak, sk)
+	if err != nil {
+		return nil, err
+	}
+	defaultSignOptions := &auth.SignOptions{
+		HeadersToSign: auth.DEFAULT_HEADERS_TO_SIGN,
+		ExpireSeconds: auth.DEFAULT_EXPIRE_SECONDS}
+	defaultConf := &BceClientConfiguration{
+		Endpoint:    endPoint,
+		Region:      DEFAULT_REGION,
+		UserAgent:   DEFAULT_USER_AGENT,
+		Credentials: credentials,
+		SignOption:  defaultSignOptions,
+		Retry:       DEFAULT_RETRY_POLICY,
+		ConnectionTimeoutInMillis: DEFAULT_CONNECTION_TIMEOUT_IN_MILLIS,
+		RedirectDisabled:          false}
+	v1Signer := &auth.BceV1Signer{}
+
+	return NewBceClient(defaultConf, v1Signer), nil
 }

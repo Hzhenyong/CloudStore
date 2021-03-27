@@ -20,6 +20,7 @@ package bos
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -36,7 +37,7 @@ const (
 	DEFAULT_MAX_PARALLEL   = 10
 	MULTIPART_ALIGN        = 1 << 20        // 1MB
 	MIN_MULTIPART_SIZE     = 1 << 20        // 1MB
-	DEFAULT_MULTIPART_SIZE = 10 * (1 << 20) // 10MB
+	DEFAULT_MULTIPART_SIZE = 12 * (1 << 20) // 12MB
 
 	MAX_PART_NUMBER        = 10000
 	MAX_SINGLE_PART_SIZE   = 5 * (1 << 30) // 5GB
@@ -52,11 +53,28 @@ type Client struct {
 	MultipartSize int64
 }
 
+// BosClientConfiguration defines the config components structure by user.
+type BosClientConfiguration struct {
+	Ak               string
+	Sk               string
+	Endpoint         string
+	RedirectDisabled bool
+}
+
 // NewClient make the BOS service client with default configuration.
 // Use `cli.Config.xxx` to access the config or change it to non-default value.
 func NewClient(ak, sk, endpoint string) (*Client, error) {
+	return NewClientWithConfig(&BosClientConfiguration{
+		Ak:               ak,
+		Sk:               sk,
+		Endpoint:         endpoint,
+		RedirectDisabled: false,
+	})
+}
+func NewClientWithConfig(config *BosClientConfiguration) (*Client, error) {
 	var credentials *auth.BceCredentials
 	var err error
+	ak, sk, endpoint := config.Ak, config.Sk, config.Endpoint
 	if len(ak) == 0 && len(sk) == 0 { // to support public-read-write request
 		credentials, err = nil, nil
 	} else {
@@ -78,7 +96,8 @@ func NewClient(ak, sk, endpoint string) (*Client, error) {
 		Credentials: credentials,
 		SignOption:  defaultSignOptions,
 		Retry:       bce.DEFAULT_RETRY_POLICY,
-		ConnectionTimeoutInMillis: bce.DEFAULT_CONNECTION_TIMEOUT_IN_MILLIS}
+		ConnectionTimeoutInMillis: bce.DEFAULT_CONNECTION_TIMEOUT_IN_MILLIS,
+		RedirectDisabled:          config.RedirectDisabled}
 	v1Signer := &auth.BceV1Signer{}
 
 	client := &Client{bce.NewBceClient(defaultConf, v1Signer),
@@ -412,10 +431,11 @@ func (c *Client) GetBucketStorageclass(bucket string) (string, error) {
 // PARAMS:
 //     - bucket: the bucket name
 //     - replicationConf: the replication config json body stream
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - error: nil if success otherwise the specific error
-func (c *Client) PutBucketReplication(bucket string, replicationConf *bce.Body) error {
-	return api.PutBucketReplication(c, bucket, replicationConf)
+func (c *Client) PutBucketReplication(bucket string, replicationConf *bce.Body, replicationRuleId string) error {
+	return api.PutBucketReplication(c, bucket, replicationConf, replicationRuleId)
 }
 
 // PutBucketReplicationFromFile - set the bucket replication config with json file name
@@ -423,14 +443,15 @@ func (c *Client) PutBucketReplication(bucket string, replicationConf *bce.Body) 
 // PARAMS:
 //     - bucket: the bucket name
 //     - confFile: the config json file name
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - error: nil if success otherwise the specific error
-func (c *Client) PutBucketReplicationFromFile(bucket, confFile string) error {
+func (c *Client) PutBucketReplicationFromFile(bucket, confFile string, replicationRuleId string) error {
 	body, err := bce.NewBodyFromFile(confFile)
 	if err != nil {
 		return err
 	}
-	return api.PutBucketReplication(c, bucket, body)
+	return api.PutBucketReplication(c, bucket, body, replicationRuleId)
 }
 
 // PutBucketReplicationFromString - set the bucket replication config with json string
@@ -438,14 +459,15 @@ func (c *Client) PutBucketReplicationFromFile(bucket, confFile string) error {
 // PARAMS:
 //     - bucket: the bucket name
 //     - confString: the config string with json format
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - error: nil if success otherwise the specific error
-func (c *Client) PutBucketReplicationFromString(bucket, confString string) error {
+func (c *Client) PutBucketReplicationFromString(bucket, confString string, replicationRuleId string) error {
 	body, err := bce.NewBodyFromString(confString)
 	if err != nil {
 		return err
 	}
-	return api.PutBucketReplication(c, bucket, body)
+	return api.PutBucketReplication(c, bucket, body, replicationRuleId)
 }
 
 // PutBucketReplicationFromStruct - set the bucket replication config with struct
@@ -453,10 +475,11 @@ func (c *Client) PutBucketReplicationFromString(bucket, confString string) error
 // PARAMS:
 //     - bucket: the bucket name
 //     - confObj: the replication config struct object
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - error: nil if success otherwise the specific error
 func (c *Client) PutBucketReplicationFromStruct(bucket string,
-	confObj *api.PutBucketReplicationArgs) error {
+	confObj *api.PutBucketReplicationArgs, replicationRuleId string) error {
 	jsonBytes, jsonErr := json.Marshal(confObj)
 	if jsonErr != nil {
 		return jsonErr
@@ -465,40 +488,54 @@ func (c *Client) PutBucketReplicationFromStruct(bucket string,
 	if err != nil {
 		return err
 	}
-	return api.PutBucketReplication(c, bucket, body)
+	return api.PutBucketReplication(c, bucket, body, replicationRuleId)
 }
 
 // GetBucketReplication - get the bucket replication config of the given bucket
 //
 // PARAMS:
 //     - bucket: the bucket name
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - *api.GetBucketReplicationResult: the result of the bucket replication config
 //     - error: nil if success otherwise the specific error
-func (c *Client) GetBucketReplication(bucket string) (*api.GetBucketReplicationResult, error) {
-	return api.GetBucketReplication(c, bucket)
+func (c *Client) GetBucketReplication(bucket string, replicationRuleId string) (*api.GetBucketReplicationResult, error) {
+	return api.GetBucketReplication(c, bucket, replicationRuleId)
+}
+
+// ListBucketReplication - get all replication config of the given bucket
+//
+// PARAMS:
+//     - bucket: the bucket name
+// RETURNS:
+//     - *api.ListBucketReplicationResult: the list of the bucket replication config
+//     - error: nil if success otherwise the specific error
+func (c *Client) ListBucketReplication(bucket string) (*api.ListBucketReplicationResult, error) {
+	return api.ListBucketReplication(c, bucket)
 }
 
 // DeleteBucketReplication - delete the bucket replication config of the given bucket
 //
 // PARAMS:
 //     - bucket: the bucket name
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - error: nil if success otherwise the specific error
-func (c *Client) DeleteBucketReplication(bucket string) error {
-	return api.DeleteBucketReplication(c, bucket)
+func (c *Client) DeleteBucketReplication(bucket string, replicationRuleId string) error {
+	return api.DeleteBucketReplication(c, bucket, replicationRuleId)
 }
 
 // GetBucketReplicationProgress - get the bucket replication process of the given bucket
 //
 // PARAMS:
 //     - bucket: the bucket name
+//     - replicationRuleId: the replication rule id composed of [0-9 A-Z a-z _ -]
 // RETURNS:
 //     - *api.GetBucketReplicationProgressResult: the process of the bucket replication
 //     - error: nil if success otherwise the specific error
-func (c *Client) GetBucketReplicationProgress(bucket string) (
+func (c *Client) GetBucketReplicationProgress(bucket string, replicationRuleId string) (
 	*api.GetBucketReplicationProgressResult, error) {
-	return api.GetBucketReplicationProgress(c, bucket)
+	return api.GetBucketReplicationProgress(c, bucket, replicationRuleId)
 }
 
 // PutBucketEncryption - set the bucket encryption config of the given bucket
@@ -728,72 +765,6 @@ func (c *Client) DeleteBucketCopyrightProtection(bucket string) error {
 	return api.DeleteBucketCopyrightProtection(c, bucket)
 }
 
-// PutBucketNotification - set the notification of the given bucket
-//
-// PARAMS:
-//     - bucket: the bucket name
-//     - body: the notification json file body
-// RETURNS:
-//     - error: nil if success otherwise the specific error
-func (c *Client) PutBucketNotification(bucket string, body *bce.Body) error {
-	return api.PutBucketNotification(c, bucket, body)
-}
-
-// PutBucketNotificationFromFile - set the notification of the given bucket with notification json file name
-//
-// PARAMS:
-//     - bucket: the bucket name
-//     - filename: the notification file name
-// RETURNS:
-//     - error: nil if success otherwise the specific error
-func (c *Client) PutBucketNotificationFromFile(bucket, filename string) error {
-	body, err := bce.NewBodyFromFile(filename)
-	if err != nil {
-		return err
-	}
-	return api.PutBucketNotification(c, bucket, body)
-}
-
-// PutBucketNotificationFromStruct - set the bucket notification config from json config object
-//
-// PARAMS:
-//     - bucket: the bucket name
-//     - filename: the bucket notification json config object
-// RETURNS:
-//     - error: nil if success otherwise the specific error
-func (c *Client) PutBucketNotificationFromStruct(bucket string, args *api.PutBucketNotificationArgs) error {
-	jsonBytes, jsonErr := json.Marshal(args)
-	if jsonErr != nil {
-		return jsonErr
-	}
-	body, err := bce.NewBodyFromBytes(jsonBytes)
-	if err != nil {
-		return err
-	}
-	return api.PutBucketNotification(c, bucket, body)
-}
-
-// GetBucketNotification - get the notification of the given bucket
-//
-// PARAMS:
-//     - bucket: the bucket name
-// RETURNS:
-//     - *api.GetBucketNotificationResult: the result of the bucket notification
-//     - error: nil if success otherwise the specific error
-func (c *Client) GetBucketNotification(bucket string) (*api.GetBucketNotificationResult, error) {
-	return api.GetBucketNotification(c, bucket)
-}
-
-// DeleteBucketNotification - delete the notification rule of the given bucket
-//
-// PARAMS:
-//     - bucket: the bucket name
-// RETURNS:
-//     - error: nil if success otherwise the specific error
-func (c *Client) DeleteBucketNotification(bucket string) error {
-	return api.DeleteBucketNotification(c, bucket)
-}
-
 // PutObject - upload a new object or rewrite the existed object with raw stream
 //
 // PARAMS:
@@ -984,6 +955,19 @@ func (c *Client) BasicGetObjectToFile(bucket, object, filePath string) error {
 //     - error: any error if it occurs
 func (c *Client) GetObjectMeta(bucket, object string) (*api.GetObjectMetaResult, error) {
 	return api.GetObjectMeta(c, bucket, object)
+}
+
+// SelectObject - select the object content
+//
+// PARAMS:
+//     - bucket: the name of the bucket
+//     - object: the name of the object
+//     - args: the optional arguments to select the object
+// RETURNS:
+//     - *api.SelectObjectResult: select object result
+//     - error: any error if it occurs
+func (c *Client) SelectObject(bucket, object string, args *api.SelectObjectArgs) (*api.SelectObjectResult, error) {
+	return api.SelectObject(c, bucket, object, args)
 }
 
 // FetchObject - fetch the object content from the given source and store
@@ -1251,6 +1235,23 @@ func (c *Client) UploadPart(bucket, object, uploadId string, partNumber int,
 func (c *Client) BasicUploadPart(bucket, object, uploadId string, partNumber int,
 	content *bce.Body) (string, error) {
 	return api.UploadPart(c, bucket, object, uploadId, partNumber, content, nil)
+}
+
+// UploadPartFromBytes - upload the single part in the multipart upload process
+//
+// PARAMS:
+//     - bucket: the bucket name
+//     - object: the object name
+//     - uploadId: the multipart upload id
+//     - partNumber: the current part number
+//     - content: the uploaded part content
+//     - args: the optional arguments
+// RETURNS:
+//     - string: the etag of the uploaded part
+//     - error: nil if ok otherwise the specific error
+func (c *Client) UploadPartFromBytes(bucket, object, uploadId string, partNumber int,
+	content []byte, args *api.UploadPartArgs) (string, error) {
+	return api.UploadPartFromBytes(c, bucket, object, uploadId, partNumber, content, args)
 }
 
 // UploadPartCopy - copy the multipart object
@@ -1744,4 +1745,418 @@ func (c *Client) GetObjectAcl(bucket, object string) (*api.GetObjectAclResult, e
 //     - error: nil if success otherwise the specific error
 func (c *Client) DeleteObjectAcl(bucket, object string) error {
 	return api.DeleteObjectAcl(c, bucket, object)
+}
+
+// RestoreObject - restore the archive object
+//
+// PARAMS:
+//     - bucket: the bucket name
+//     - object: the object name
+//     - restoreDays: the effective time of restore
+//     - restoreTier: the tier of restore
+// RETURNS:
+//     - error: nil if success otherwise the specific error
+func (c *Client) RestoreObject(bucket string, object string, restoreDays int, restoreTier string) error {
+	if _, ok := api.VALID_RESTORE_TIER[restoreTier]; !ok {
+		return errors.New("invalid restore tier")
+	}
+
+	if restoreDays <= 0 {
+		return errors.New("invalid restore days")
+	}
+
+	args := api.ArchiveRestoreArgs{
+		RestoreTier: restoreTier,
+		RestoreDays: restoreDays,
+	}
+	return api.RestoreObject(c, bucket, object, args)
+}
+
+// PutBucketTrash - put the bucket trash
+//
+// PARAMS:
+//     - bucket: the bucket name
+//     - trashReq: the trash request
+// RETURNS:
+//     - error: nil if success otherwise the specific error
+func (c *Client) PutBucketTrash(bucket string, trashReq api.PutBucketTrashReq) error {
+	return api.PutBucketTrash(c, bucket, trashReq)
+}
+
+// GetBucketTrash - get the bucket trash
+//
+// PARAMS:
+//     - bucket: the bucket name
+// RETURNS:
+//     - *api.GetBucketTrashResult,: the result of the bucket trash
+//     - error: nil if success otherwise the specific error
+func (c *Client) GetBucketTrash(bucket string) (*api.GetBucketTrashResult, error) {
+	return api.GetBucketTrash(c, bucket)
+}
+
+// DeleteBucketTrash - delete the trash of the given bucket
+//
+// PARAMS:
+//     - bucket: the bucket name
+// RETURNS:
+//     - error: nil if success otherwise the specific error
+func (c *Client) DeleteBucketTrash(bucket string) error {
+	return api.DeleteBucketTrash(c, bucket)
+}
+
+// PutBucketNotification - put the bucket notification
+//
+// PARAMS:
+//     - bucket: the bucket name
+//     - putBucketNotificationReq: the bucket notification request
+// RETURNS:
+//     - error: nil if success otherwise the specific error
+func (c *Client) PutBucketNotification(bucket string, putBucketNotificationReq api.PutBucketNotificationReq) error {
+	return api.PutBucketNotification(c, bucket, putBucketNotificationReq)
+}
+
+// GetBucketNotification - get the bucket notification
+//
+// PARAMS:
+//     - bucket: the bucket name
+// RETURNS:
+//     - *api.PutBucketNotificationReq,: the result of the bucket notification
+//     - error: nil if success otherwise the specific error
+func (c *Client) GetBucketNotification(bucket string) (*api.PutBucketNotificationReq, error) {
+	return api.GetBucketNotification(c, bucket)
+}
+
+// DeleteBucketNotification - delete the notification of the given bucket
+//
+// PARAMS:
+//     - bucket: the bucket name
+// RETURNS:
+//     - error: nil if success otherwise the specific error
+func (c *Client) DeleteBucketNotification(bucket string) error {
+	return api.DeleteBucketNotification(c, bucket)
+}
+
+// ParallelUpload - auto multipart upload object
+//
+// PARAMS:
+//     - bucket: the bucket name
+//     - object: the object name
+//     - filename: the filename
+//     - contentType: the content type default(application/octet-stream)
+//     - args: the bucket name nil using default
+// RETURNS:
+//     - *api.CompleteMultipartUploadResult: multipart upload result
+//     - error: nil if success otherwise the specific error
+func (c *Client) ParallelUpload(bucket string, object string, filename string, contentType string, args *api.InitiateMultipartUploadArgs) (*api.CompleteMultipartUploadResult, error) {
+
+	initiateMultipartUploadResult, err := api.InitiateMultipartUpload(c, bucket, object, contentType, args)
+	if err != nil {
+		return nil, err
+	}
+
+	partEtags, err := c.parallelPartUpload(bucket, object, filename, initiateMultipartUploadResult.UploadId)
+	if err != nil {
+		c.AbortMultipartUpload(bucket, object, initiateMultipartUploadResult.UploadId)
+		return nil, err
+	}
+
+	completeMultipartUploadResult, err := c.CompleteMultipartUploadFromStruct(bucket, object, initiateMultipartUploadResult.UploadId, &api.CompleteMultipartUploadArgs{Parts: partEtags})
+	if err != nil {
+		c.AbortMultipartUpload(bucket, object, initiateMultipartUploadResult.UploadId)
+		return nil, err
+	}
+	return completeMultipartUploadResult, nil
+}
+
+// parallelPartUpload - single part upload
+//
+// PARAMS:
+//     - bucket: the bucket name
+//     - object: the object name
+//     - filename: the uploadId
+//     - uploadId: the uploadId
+// RETURNS:
+//     - []api.UploadInfoType: multipart upload result
+//     - error: nil if success otherwise the specific error
+func (c *Client) parallelPartUpload(bucket string, object string, filename string, uploadId string) ([]api.UploadInfoType, error) {
+	file, err := os.Open(filename)
+	if err != nil {
+		return nil, err
+	}
+	// 分块大小按MULTIPART_ALIGN=1MB对齐
+	partSize := (c.MultipartSize +
+		MULTIPART_ALIGN - 1) / MULTIPART_ALIGN * MULTIPART_ALIGN
+
+	// 获取文件大小，并计算分块数目，最大分块数MAX_PART_NUMBER=10000
+	fileInfo, _ := file.Stat()
+	fileSize := fileInfo.Size()
+	partNum := (fileSize + partSize - 1) / partSize
+	if partNum > MAX_PART_NUMBER { // 超过最大分块数，需调整分块大小
+		partSize = (fileSize + MAX_PART_NUMBER + 1) / MAX_PART_NUMBER
+		partSize = (partSize + MULTIPART_ALIGN - 1) / MULTIPART_ALIGN * MULTIPART_ALIGN
+		partNum = (fileSize + partSize - 1) / partSize
+	}
+
+	parallelChan := make(chan int, c.MaxParallel)
+
+	errChan := make(chan error, c.MaxParallel)
+
+	resultChan := make(chan api.UploadInfoType, partNum)
+
+	// 逐个分块上传
+	for i := int64(1); i <= partNum; i++ {
+		// 计算偏移offset和本次上传的大小uploadSize
+		uploadSize := partSize
+		offset := partSize * (i - 1)
+		left := fileSize - offset
+		if left < partSize {
+			uploadSize = left
+		}
+
+		// 创建指定偏移、指定大小的文件流
+		partBody, _ := bce.NewBodyFromSectionFile(file, offset, uploadSize)
+
+		select {
+		case err = <-errChan:
+			return nil, err
+		default:
+			select {
+			case err = <-errChan:
+				return nil, err
+			case parallelChan <- 1:
+				go c.singlePartUpload(bucket, object, uploadId, int(i), partBody, parallelChan, errChan, resultChan)
+			}
+
+		}
+	}
+
+	partEtags := make([]api.UploadInfoType, partNum)
+	for i := int64(0); i < partNum; i++ {
+		select {
+		case err := <-errChan:
+			return nil, err
+		case result := <-resultChan:
+			partEtags[result.PartNumber-1].PartNumber = result.PartNumber
+			partEtags[result.PartNumber-1].ETag = result.ETag
+		}
+	}
+	return partEtags, nil
+}
+
+// singlePartUpload - single part upload
+//
+// PARAMS:
+//     - pararelChan: the pararelChan
+//     - errChan: the error chan
+//     - result: the upload result chan
+//     - bucket: the bucket name
+//     - object: the object name
+//     - uploadId: the uploadId
+//     - partNumber: the part number of the object
+//     - content: the content of current part
+func (c *Client) singlePartUpload(
+	bucket string, object string, uploadId string,
+	partNumber int, content *bce.Body,
+	parallelChan chan int, errChan chan error, result chan api.UploadInfoType) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Fatal("parallelPartUpload recovered in f:", r)
+			errChan <- errors.New("parallelPartUpload panic")
+		}
+		<-parallelChan
+	}()
+
+	var args api.UploadPartArgs
+	args.ContentMD5 = content.ContentMD5()
+
+	etag, err := api.UploadPart(c, bucket, object, uploadId, partNumber, content, &args)
+	if err != nil {
+		errChan <- err
+		log.Error("upload part fail,err:%v", err)
+		return
+	}
+	result <- api.UploadInfoType{PartNumber: partNumber, ETag: etag}
+	return
+}
+
+// ParallelCopy - auto multipart copy object
+//
+// PARAMS:
+//     - srcBucketName: the src bucket name
+//     - srcObjectName: the src object name
+//     - destBucketName: the dest bucket name
+//     - destObjectName: the dest object name
+//     - args: the copy args
+//     - srcClient: the src region client
+// RETURNS:
+//     - *api.CompleteMultipartUploadResult: multipart upload result
+//     - error: nil if success otherwise the specific error
+func (c *Client) ParallelCopy(srcBucketName string, srcObjectName string,
+	destBucketName string, destObjectName string,
+	args *api.MultiCopyObjectArgs, srcClient *Client) (*api.CompleteMultipartUploadResult, error) {
+
+	if srcClient == nil {
+		srcClient = c
+	}
+	objectMeta, err := srcClient.GetObjectMeta(srcBucketName, srcObjectName)
+	if err != nil {
+		return nil, err
+	}
+
+	initArgs := api.InitiateMultipartUploadArgs{
+		CacheControl:       objectMeta.CacheControl,
+		ContentDisposition: objectMeta.ContentDisposition,
+		Expires:            objectMeta.Expires,
+		StorageClass:       objectMeta.StorageClass,
+	}
+	if args != nil {
+		if len(args.StorageClass) != 0 {
+			initArgs.StorageClass = args.StorageClass
+		}
+	}
+	initiateMultipartUploadResult, err := api.InitiateMultipartUpload(c, destBucketName, destObjectName, objectMeta.ContentType, &initArgs)
+
+	if err != nil {
+		return nil, err
+	}
+
+	source := fmt.Sprintf("/%s/%s", srcBucketName, srcObjectName)
+	partEtags, err := c.parallelPartCopy(*objectMeta, source, destBucketName, destObjectName, initiateMultipartUploadResult.UploadId)
+
+	if err != nil {
+		c.AbortMultipartUpload(destBucketName, destObjectName, initiateMultipartUploadResult.UploadId)
+		return nil, err
+	}
+
+	completeMultipartUploadResult, err := c.CompleteMultipartUploadFromStruct(destBucketName, destObjectName, initiateMultipartUploadResult.UploadId, &api.CompleteMultipartUploadArgs{Parts: partEtags})
+	if err != nil {
+		c.AbortMultipartUpload(destBucketName, destObjectName, initiateMultipartUploadResult.UploadId)
+		return nil, err
+	}
+	return completeMultipartUploadResult, nil
+}
+
+// parallelPartCopy - parallel part copy
+//
+// PARAMS:
+//     - srcMeta: the copy source object meta
+//     - source: the copy source
+//     - bucket: the dest bucket name
+//     - object: the dest object name
+//     - uploadId: the uploadId
+// RETURNS:
+//     - []api.UploadInfoType: multipart upload result
+//     - error: nil if success otherwise the specific error
+func (c *Client) parallelPartCopy(srcMeta api.GetObjectMetaResult, source string, bucket string, object string, uploadId string) ([]api.UploadInfoType, error) {
+	var err error
+	size := srcMeta.ContentLength
+	partSize := int64(DEFAULT_MULTIPART_SIZE)
+
+	partNum := (size + partSize - 1) / partSize
+
+	parallelChan := make(chan int, c.MaxParallel)
+
+	errChan := make(chan error, c.MaxParallel)
+
+	resultChan := make(chan api.UploadInfoType, partNum)
+
+	for i := int64(1); i <= partNum; i++ {
+		// 计算偏移offset和本次上传的大小uploadSize
+		uploadSize := partSize
+		offset := partSize * (i - 1)
+		left := size - offset
+		if left < partSize {
+			uploadSize = left
+		}
+
+		partCopyArgs := api.UploadPartCopyArgs{
+			SourceRange: fmt.Sprintf("bytes=%d-%d", (i-1)*partSize, (i-1)*partSize+uploadSize-1),
+			IfMatch:     srcMeta.ETag,
+		}
+
+		select {
+		case err = <-errChan:
+			return nil, err
+		default:
+			select {
+			case err = <-errChan:
+				return nil, err
+			case parallelChan <- 1:
+				go c.singlePartCopy(source, bucket, object, uploadId, int(i), &partCopyArgs, parallelChan, errChan, resultChan)
+			}
+
+		}
+	}
+
+	partEtags := make([]api.UploadInfoType, partNum)
+	for i := int64(0); i < partNum; i++ {
+		select {
+		case err := <-errChan:
+			return nil, err
+		case result := <-resultChan:
+			partEtags[result.PartNumber-1].PartNumber = result.PartNumber
+			partEtags[result.PartNumber-1].ETag = result.ETag
+		}
+	}
+	return partEtags, nil
+}
+
+// singlePartCopy - single part copy
+//
+// PARAMS:
+//     - pararelChan: the pararelChan
+//     - errChan: the error chan
+//     - result: the upload result chan
+//     - source: the copy source
+//     - bucket: the bucket name
+//     - object: the object name
+//     - uploadId: the uploadId
+//     - partNumber: the part number of the object
+//     - args: the copy args
+func (c *Client) singlePartCopy(source string, bucket string, object string, uploadId string,
+	partNumber int, args *api.UploadPartCopyArgs,
+	parallelChan chan int, errChan chan error, result chan api.UploadInfoType) {
+
+	defer func() {
+		if r := recover(); r != nil {
+			log.Fatal("parallelPartUpload recovered in f:", r)
+			errChan <- errors.New("parallelPartUpload panic")
+		}
+		<-parallelChan
+	}()
+
+	copyObjectResult, err := api.UploadPartCopy(c, bucket, object, source, uploadId, partNumber, args)
+	if err != nil {
+		errChan <- err
+		log.Error("upload part fail,err:%v", err)
+		return
+	}
+	result <- api.UploadInfoType{PartNumber: partNumber, ETag: copyObjectResult.ETag}
+	return
+}
+
+// PutSymlink - create symlink for exist target object
+//
+// PARAMS:
+//     - bucket: the name of the bucket
+//     - object: the name of the object
+//     - symlinkKey: the name of the symlink
+//     - symlinkArgs: the optional arguments
+// RETURNS:
+//     - error: the put error if any occurs
+func (c *Client) PutSymlink(bucket string, object string, symlinkKey string, symlinkArgs *api.PutSymlinkArgs) error {
+	return api.PutObjectSymlink(c, bucket, object, symlinkKey, symlinkArgs)
+}
+
+// PutSymlink - create symlink for exist target object
+//
+// PARAMS:
+//     - bucket: the name of the bucket
+//     - object: the name of the symlink
+// RETURNS:
+//	   - string: the target of the symlink
+//     - error: the put error if any occurs
+func (c *Client) GetSymlink(bucket string, object string) (string, error) {
+	return api.GetObjectSymlink(c, bucket, object)
 }

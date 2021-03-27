@@ -2,13 +2,13 @@ package CloudStore
 
 import (
 	"fmt"
+	"github.com/baidubce/bce-sdk-go/services/bos"
+	"github.com/baidubce/bce-sdk-go/services/bos/api"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
 
-	"github.com/baidubce/bce-sdk-go/services/bos"
-	"github.com/baidubce/bce-sdk-go/services/bos/api"
 )
 
 type BOS struct {
@@ -52,8 +52,8 @@ func (b *BOS) Upload(tmpFile, saveFile string, headers ...map[string]string) (er
 				args.ContentDisposition = v
 			case "content-type":
 				args.ContentType = v
-			case "content-encoding":
-				args.ContentEncoding = v
+			//case "content-encoding":
+			//	args.ContentEncoding = v
 			default:
 				args.UserMeta[k] = v
 			}

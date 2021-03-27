@@ -18,11 +18,13 @@ package http
 
 // Constants of the supported HTTP methods for BCE
 const (
-	GET    = "GET"
-	PUT    = "PUT"
-	POST   = "POST"
-	DELETE = "DELETE"
-	HEAD   = "HEAD"
+	GET     = "GET"
+	PUT     = "PUT"
+	POST    = "POST"
+	DELETE  = "DELETE"
+	HEAD    = "HEAD"
+	OPTIONS = "OPTIONS"
+	PATCH   = "PATCH"
 )
 
 // Constants of the HTTP headers for BCE
@@ -54,6 +56,7 @@ const (
 	BCE_GRANT_READ           = "x-bce-grant-read"
 	BCE_GRANT_FULL_CONTROL   = "x-bce-grant-full-control"
 	BCE_CONTENT_SHA256       = "x-bce-content-sha256"
+	BCE_CONTENT_CRC32        = "x-bce-content-crc32"
 	BCE_REQUEST_ID           = "x-bce-request-id"
 	BCE_USER_METADATA_PREFIX = "x-bce-meta-"
 	BCE_SECURITY_TOKEN       = "x-bce-security-token"
@@ -72,4 +75,9 @@ const (
 	BCE_NEXT_APPEND_OFFSET              = "x-bce-next-append-offset"
 	BCE_STORAGE_CLASS                   = "x-bce-storage-class"
 	BCE_PROCESS                         = "x-bce-process"
+	BCE_RESTORE_TIER                    = "x-bce-restore-tier"
+	BCE_RESTORE_DAYS                    = "x-bce-restore-days"
+	BCE_RESTORE                         = "x-bce-restore"
+	BCE_FORBID_OVERWRITE                = "x-bce-forbid-overwrite"
+	BCE_SYMLINK_TARGET                  = "x-bce-symlink-target"
 )

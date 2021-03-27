@@ -181,10 +181,17 @@ type BucketReplicationType struct {
 	ReplicateDeletes string                       `json:"replicateDeletes"`
 	Destination      *BucketReplicationDescriptor `json:"destination,omitempty"`
 	ReplicateHistory *BucketReplicationDescriptor `json:"replicateHistory,omitempty"`
+	CreateTime       int64                        `json:"createTime"`
+	DestRegion       string                       `json:"destRegion"`
 }
 
 type PutBucketReplicationArgs BucketReplicationType
 type GetBucketReplicationResult BucketReplicationType
+
+// ListBucketReplicationResult defines output result for replication conf list
+type ListBucketReplicationResult struct {
+	Rules []BucketReplicationType `json:"rules"`
+}
 
 // GetBucketReplicationProgressResult defines output result for replication process
 type GetBucketReplicationProgressResult struct {
@@ -230,37 +237,6 @@ type CopyrightProtectionType struct {
 	Resource []string `json:"resource"`
 }
 
-type Notification struct {
-	Id        string            `json:"id"`
-	AppId     string            `json:"appId"`
-	Status    string            `json:"status"`
-	Resources []string          `json:"resources"`
-	Events    []string          `json:"events"`
-	Quota     NotificationQuota `json:"quota"`
-	Apps      []NotificationApp `json:"apps"`
-}
-
-type NotificationApp struct {
-	Id       string `json:"id"`
-	AipAppId string `json:"aipAppId"`
-	EventUrl string `json:"eventUrl"`
-	XVars    string `json:"xVars"`
-}
-
-type NotificationQuota struct {
-	QuotaDay float64 `json:"quotaDay"`
-	QuotaSec float64 `json:"quotaSec"`
-}
-
-type PutBucketNotificationArgs struct {
-	Notifications []Notification `json:"notifications"`
-}
-
-// GetBucketNotificationResult defines the notification result structure for getting
-type GetBucketNotificationResult struct {
-	Notifications []Notification `json:"notifications"`
-}
-
 // ObjectAclType defines the data structure for Put and Get object acl API
 type ObjectAclType struct {
 	AccessControlList []GrantType `json:"accessControlList"`
@@ -279,6 +255,7 @@ type PutObjectArgs struct {
 	Expires            string
 	UserMeta           map[string]string
 	ContentSha256      string
+	ContentCrc32       string
 	StorageClass       string
 	Process            string
 }
@@ -291,6 +268,10 @@ type CopyObjectArgs struct {
 	IfNoneMatch       string
 	IfModifiedSince   string
 	IfUnmodifiedSince string
+}
+
+type MultiCopyObjectArgs struct {
+	StorageClass string
 }
 
 // CopyObjectResult defines the result json structure for the copy object api.
@@ -308,6 +289,7 @@ type ObjectMeta struct {
 	ContentType        string
 	ContentMD5         string
 	ContentSha256      string
+	ContentCrc32       string
 	Expires            string
 	LastModified       string
 	ETag               string
@@ -315,6 +297,8 @@ type ObjectMeta struct {
 	StorageClass       string
 	NextAppendOffset   string
 	ObjectType         string
+	BceRestore         string
+	BceObjectType      string
 }
 
 // GetObjectResult defines the result data of the get object api.
@@ -327,6 +311,63 @@ type GetObjectResult struct {
 // GetObjectMetaResult defines the result data of the get object meta api.
 type GetObjectMetaResult struct {
 	ObjectMeta
+}
+
+// SelectObjectResult defines the result data of the select object api.
+type SelectObjectResult struct {
+	Body io.ReadCloser
+}
+
+// selectObject request args
+type SelectObjectArgs struct {
+	SelectType    string               `json: "-"`
+	SelectRequest *SelectObjectRequest `json: "selectRequest"`
+}
+
+type SelectObjectRequest struct {
+	Expression          string                `json:"expression"`
+	ExpressionType      string                `json:"expressionType"` // SQL
+	InputSerialization  *SelectObjectInput    `json:"inputSerialization"`
+	OutputSerialization *SelectObjectOutput   `json:"outputSerialization"`
+	RequestProgress     *SelectObjectProgress `json:"requestProgress"`
+}
+
+type SelectObjectInput struct {
+	CompressionType string            `json:"compressionType"`
+	CsvParams       map[string]string `json:"csv"`
+	JsonParams      map[string]string `json:"json"`
+}
+type SelectObjectOutput struct {
+	OutputHeader bool              `json:"outputHeader"`
+	CsvParams    map[string]string `json:"csv"`
+	JsonParams   map[string]string `json:"json"`
+}
+type SelectObjectProgress struct {
+	Enabled bool `json:"enabled"`
+}
+
+type Prelude struct {
+	TotalLen   uint32
+	HeadersLen uint32
+}
+
+// selectObject response msg
+type CommonMessage struct {
+	Prelude
+	Headers map[string]string // message-type/content-type……
+	Crc32   uint32            // crc32 of RecordsMessage
+}
+type RecordsMessage struct {
+	CommonMessage
+	Records []string // csv/json seleted data, one or more records
+}
+type ContinuationMessage struct {
+	CommonMessage
+	BytesScanned  uint64
+	BytesReturned uint64
+}
+type EndMessage struct {
+	CommonMessage
 }
 
 // FetchObjectArgs defines the optional arguments structure for the fetch object api.
@@ -353,6 +394,7 @@ type AppendObjectArgs struct {
 	Expires            string
 	UserMeta           map[string]string
 	ContentSha256      string
+	ContentCrc32       string
 	StorageClass       string
 }
 
@@ -360,6 +402,7 @@ type AppendObjectArgs struct {
 type AppendObjectResult struct {
 	ContentMD5       string
 	NextAppendOffset int64
+	ContentCrc32     string
 	ETag             string
 }
 
@@ -404,6 +447,7 @@ type InitiateMultipartUploadResult struct {
 type UploadPartArgs struct {
 	ContentMD5    string
 	ContentSha256 string
+	ContentCrc32  string
 }
 
 // UploadPartCopyArgs defines the optional arguments of UploadPartCopy.
@@ -415,6 +459,12 @@ type UploadPartCopyArgs struct {
 	IfUnmodifiedSince string
 }
 
+type PutSymlinkArgs struct {
+	ForbidOverwrite string
+	StorageClass    string
+	UserMeta        map[string]string
+}
+
 // UploadInfoType defines an uploaded part info structure.
 type UploadInfoType struct {
 	PartNumber int    `json:"partNumber"`
@@ -423,17 +473,19 @@ type UploadInfoType struct {
 
 // CompleteMultipartUploadArgs defines the input arguments structure of CompleteMultipartUpload.
 type CompleteMultipartUploadArgs struct {
-	Parts    []UploadInfoType  `json:"parts"`
-	UserMeta map[string]string `json:"-"`
-	Process  string            `json:"-"`
+	Parts        []UploadInfoType  `json:"parts"`
+	UserMeta     map[string]string `json:"-"`
+	Process      string            `json:"-"`
+	ContentCrc32 string            `json:"-"`
 }
 
 // CompleteMultipartUploadResult defines the result structure of CompleteMultipartUpload.
 type CompleteMultipartUploadResult struct {
-	Location string `json:"location"`
-	Bucket   string `json:"bucket"`
-	Key      string `json:"key"`
-	ETag     string `json:"eTag"`
+	Location     string `json:"location"`
+	Bucket       string `json:"bucket"`
+	Key          string `json:"key"`
+	ETag         string `json:"eTag"`
+	ContentCrc32 string `json:"-"`
 }
 
 // ListPartsArgs defines the input optional arguments of listing parts information.
@@ -491,4 +543,37 @@ type ListMultipartUploadsResult struct {
 	MaxUploads     int                        `json:"maxUploads"`
 	NextKeyMarker  string                     `json:"nextKeyMarker"`
 	Uploads        []ListMultipartUploadsType `json:"uploads"`
+}
+
+type ArchiveRestoreArgs struct {
+	RestoreTier string
+	RestoreDays int
+}
+
+type GetBucketTrashResult struct {
+	TrashDir string `json:"trashDir"`
+}
+
+type PutBucketTrashReq struct {
+	TrashDir string `json:"trashDir"`
+}
+
+type PutBucketNotificationReq struct {
+	Notifications []PutBucketNotificationSt `json:"notifications"`
+}
+
+type PutBucketNotificationSt struct {
+	Id        string                        `json:"id"`
+	Name      string                        `json:"name"`
+	AppId     string                        `json:"appId"`
+	Status    string                        `json:"status"`
+	Resources []string                      `json:"resources"`
+	Events    []string                      `json:"events"`
+	Apps      []PutBucketNotificationAppsSt `json:"apps"`
+}
+
+type PutBucketNotificationAppsSt struct {
+	Id       string `json:"id"`
+	EventUrl string `json:"eventUrl"`
+	XVars    string `json:"xVars"`
 }
